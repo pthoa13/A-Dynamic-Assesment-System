@@ -1,36 +1,173 @@
+import os
+import sys
+import logging
+
+from training import train_model
+from scoring import score_model
+from deployment import store_model_into_pickle
+from diagnostics import (
+    model_predictions,
+    dataframe_summary,
+    missing_data,
+    execution_time,
+    outdated_packages_list,
+)
+from reporting import report_score_model
+from ingestion import merge_multiple_dataframe
+from apicalls import request_api
+from config import get_config
 
 
-import training
-import scoring
-import deployment
-import diagnostics
-import reporting
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+LOGGER = logging.getLogger(__name__)
+CONFIG = get_config()
+input_folder_path = CONFIG['input_folder_path']
+output_folder_path = CONFIG['output_folder_path']
+output_model_path = CONFIG['output_model_path']
+prod_deployment_path = CONFIG['prod_deployment_path']
 
-##################Check and read new data
-#first, read ingestedfiles.txt
+test_data_csv_path = os.path.join(
+    os.getcwd(), 
+    CONFIG["test_data_path"], 
+    'testdata.csv'
+)
+final_data_path = os.path.join(
+    os.getcwd(),
+    CONFIG["output_folder_path"],
+    'finaldata.csv'
+)
+cfm_path = os.path.join(
+    os.getcwd(),
+    CONFIG["output_model_path"],
+    'confusionmatrix.png'
+)
+api_returns_path = os.path.join(
+    os.getcwd(),
+    CONFIG["output_model_path"],
+    'apireturns.txt'
+)
 
-#second, determine whether the source data folder has files that aren't listed in ingestedfiles.txt
+
+def ingest_files(output_folder_path):
+    """
+    Ingest data from the input folder and save it in the output folder
+
+    Args:
+        output_folder_path (str): path to the output folder
+
+    Returns:
+        ingested (list): list of ingested files
+    """
+    ingested_file_path = os.path.join(
+        os.getcwd(),
+        output_folder_path,
+        'ingestedfiles.txt')
+    with open(ingested_file_path, 'r') as ingested_file:
+        ingested = ingested_file.readlines()
+        ingested = [x.strip() for x in ingested]
+    return ingested
 
 
+def check_new_files(ingested, input_folder_path):
+    """
+    Check if there is new files in the input folder
 
-##################Deciding whether to proceed, part 1
-#if you found new data, you should proceed. otherwise, do end the process here
+    Args:
+        ingested (list): list of ingested files
+        input_folder_path (str): path to the input folder
+
+    Returns:
+        new_df (dataframe): dataframe with no duplicates
+    """
+    input_dir = os.path.join(os.getcwd(), input_folder_path)
+    input_files = os.listdir(input_dir)
+
+    all_ingest_files = list(set(ingested + input_files))
+    has_new_files = False
+    if len(all_ingest_files) > len(ingested):
+        has_new_files = True
+        LOGGER.info('There is new files. Ingesting new files...')
+    if not has_new_files:
+        LOGGER.info('There is no new file')
+        sys.exit()
+    ingested_file_path = os.path.join(
+        os.getcwd(),
+        output_folder_path,
+        'ingestedfiles.txt'
+    )
+    new_df = merge_multiple_dataframe(
+        input_folder_path,
+        ingested_file_path,
+        final_data_path)
+
+    record_file_path = os.path.join(
+        os.getcwd(),
+        output_folder_path,
+        'ingestedfiles.txt')
+    with open(record_file_path, 'w') as record_file:
+        for each_filename in all_ingest_files:
+            record_file.write(each_filename + '\n')
+    return new_df
 
 
-##################Checking for model drift
-#check whether the score from the deployed model is different from the score from the model that uses the newest ingested data
+def check_drift(new_df, prod_deployment_path):
+    latest_score_file = os.path.join(
+        os.getcwd(),
+        prod_deployment_path,
+        'latestscore.txt')
+    with open(latest_score_file, 'r') as score_file:
+        prev_f1_score = float(score_file.readline())
+
+    prod_model_train_path = os.path.join(
+        os.getcwd(),
+        prod_deployment_path,
+        'trainedmodel.pkl'
+    )
+
+    new_f1_score = score_model(prod_model_train_path, new_df)
+    model_drift = False
+    if new_f1_score != prev_f1_score:
+        model_drift = True
+
+    if not model_drift:
+        LOGGER.info(
+            f"No drift >> Previous F1_score {prev_f1_score} = New F1_score {new_f1_score}")
+        sys.exit()
+    else:
+        LOGGER.info(
+            f"Model drift >> Previous F1_score {prev_f1_score} != New F1_score {new_f1_score}")
+        LOGGER.info("Re-training...")
+        output_model_train_path = os.path.join(
+            os.getcwd(),
+            output_model_path,
+            'trainedmodel.pkl'
+        )
+        train_model(final_data_path, output_model_train_path)
+
+        LOGGER.info('Re-deploying')
+        store_model_into_pickle(
+            output_model_path,
+            output_folder_path,
+            prod_deployment_path)
+        model_predictions(test_data_csv_path, prod_deployment_path)
+        dataframe_summary(test_data_csv_path)
+        missing_data(test_data_csv_path)
+        execution_time(input_folder_path, prod_deployment_path)
+        outdated_packages_list()
+        report_score_model(test_data_csv_path, cfm_path, prod_deployment_path)
+        request_api(
+            URL="http://127.0.0.1:8000",
+            api_returns_path=api_returns_path)
+        LOGGER.info('Done')
 
 
-##################Deciding whether to proceed, part 2
-#if you found model drift, you should proceed. otherwise, do end the process here
-
-
-
-##################Re-deployment
-#if you found evidence for model drift, re-run the deployment.py script
-
-##################Diagnostics and reporting
-#run diagnostics.py and reporting.py for the re-deployed model
+if __name__ == '__main__':
+    ingested = ingest_files(output_folder_path)
+    new_df = check_new_files(ingested, input_folder_path)
+    check_drift(new_df, prod_deployment_path)
 
 
 

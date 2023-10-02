@@ -1,0 +1,1 @@
+*/10 * * * * /Users/bonth/Desktop/machine-learning-devops-engineer-nanodegree-udacity/A-Dynamic-Risk-Assesment-System/fullprocess.py

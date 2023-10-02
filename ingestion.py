@@ -32,6 +32,20 @@ def merge_multiple_dataframe(
     ingested_files_path,
     final_data_path
 ):
+    """
+    Merge multiple dataframes from CSV files located in the input folder path, 
+    remove duplicates, and save the merged dataframe to the final data path.
+    Args:
+        input_folder_path (str): Path to the folder containing
+                                the input CSV files.
+        ingested_files_path (str): Path to the file to store 
+                                the names of ingested files.
+        final_data_path (str): Path to save the merged and 
+                                processed dataframe as a CSV file.
+    Returns:
+        df_processed (pd.DataFrame): Merged and processed dataframe.
+
+    """
     data_path_list = glob.glob(
         os.path.join(
             os.getcwd(),
